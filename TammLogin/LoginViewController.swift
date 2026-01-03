@@ -7,12 +7,16 @@
 
 import UIKit
 import FirebaseAuth
+import FirebaseFirestore
 
 class LoginViewController: UIViewController {
-
+    
     // MARK: - Outlets
     @IBOutlet weak var emailTextField: UITextField!
     @IBOutlet weak var passwordTextField: UITextField!
+
+    // MARK: - Firestore
+    let db = Firestore.firestore()
 
     // MARK: - Lifecycle
     override func viewDidLoad() {
@@ -27,48 +31,79 @@ class LoginViewController: UIViewController {
 
     // MARK: - Login Function
     func loginUser() {
-        // Get email and password safely
-        let email = emailTextField.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let password = passwordTextField.text ?? ""
-
-        // Check for empty fields
-        if email.isEmpty || password.isEmpty {
-            showAlert(title: "Error", message: "Please fill all fields")
+        guard let email = emailTextField.text?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty,
+              let password = passwordTextField.text,
+              !password.isEmpty else {
+            showAlert(title: "Error", message: "Please enter email and password")
             return
         }
 
-        // Firebase sign-in
-        Auth.auth().signIn(withEmail: email, password: password) { authResult, error in
+        // Firebase Auth login
+        Auth.auth().signIn(withEmail: email, password: password) { [weak self] authResult, error in
+            guard let self = self else { return }
 
-            // Any login failure shows the same message
-            if error != nil {
-                self.showAlert(title: "Login Failed", message: "This email is not registered")
+            if let error = error {
+                print("Auth error:", error.localizedDescription)
+                self.showAlert(title: "Login Failed", message: "Wrong email or password")
                 return
             }
 
-            // Successful login
-            guard let user = Auth.auth().currentUser else {
-                self.showAlert(title: "Login Failed", message: "Unable to fetch user data")
-                return
-            }
+            print("Logged in UID:", authResult?.user.uid ?? "No UID")
 
-            print("✅ User logged in successfully: \(user.email ?? "")")
+            // Fetch user document from Firestore by email
+            self.db.collection("Users")
+                .whereField("email", isEqualTo: email)
+                .getDocuments { snapshot, error in
+                    if let error = error {
+                        print("Firestore error:", error.localizedDescription)
+                        self.showAlert(title: "Error", message: "Could not fetch user data")
+                        return
+                    }
 
-            // Navigate to Home
-            DispatchQueue.main.async {
-                self.performSegue(withIdentifier: "goToHome", sender: nil)
-            }
+                    guard let document = snapshot?.documents.first else {
+                        print("No document found for email:", email)
+                        self.showAlert(title: "Error", message: "User data not found")
+                        return
+                    }
+
+                    print("Document data:", document.data())
+
+                    let role = document.data()["role"] as? String ?? "user"
+                    print("User role:", role)
+
+                    // Navigate based on role
+                    DispatchQueue.main.async {
+                        self.navigateToDashboard(forRole: role)
+                    }
+                }
         }
     }
 
-    // MARK: - Alert Function
-    func showAlert(title: String, message: String) {
-        DispatchQueue.main.async {
-            let alert = UIAlertController(title: title,
-                                          message: message,
-                                          preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "OK", style: .default))
-            self.present(alert, animated: true)
+    // MARK: - Navigation
+    func navigateToDashboard(forRole role: String) {
+        let storyboard = UIStoryboard(name: "Main", bundle: nil)
+        var destinationVC: UIViewController
+
+        switch role {
+        case "admin":
+            destinationVC = storyboard.instantiateViewController(withIdentifier: "AdminDashboardVC")
+        case "maintenance":
+            // Navigate to first page of maintenance request form
+            destinationVC = storyboard.instantiateViewController(withIdentifier: "MaintenanceDashboardVC")
+        default:
+            destinationVC = storyboard.instantiateViewController(withIdentifier: "UserDashboardVC")
         }
+
+        let nav = UINavigationController(rootViewController: destinationVC)
+        nav.modalPresentationStyle = .fullScreen
+        present(nav, animated: true)
+    }
+
+    // MARK: - Alert Helper
+    func showAlert(title: String, message: String) {
+        let alert = UIAlertController(title: title, message: message, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "OK", style: .default))
+        present(alert, animated: true)
     }
 }
